@@ -370,6 +370,164 @@ vadd(A, B, C, 1024)
 fpga_code_native(vadd, Tuple{Vector{Float32}, Vector{Float32}, Vector{Float32}, Int})
 ```
 
+## Native HLS Backend
+
+FPGACompiler.jl includes a native Julia HLS backend that generates Verilog directly, without requiring vendor tools.
+
+### Complete Example: Vector Addition to Verilog
+
+```julia
+using FPGACompiler
+using FPGACompiler.HLS
+using FPGACompiler.RTL
+using FPGACompiler.Sim
+
+# Step 1: Create a CDFG manually (or extract from LLVM IR)
+cdfg = CDFG("vector_add")
+
+# Add input nodes
+in_a = DFGNode(1, OP_NOP, "arg_a")
+in_b = DFGNode(2, OP_NOP, "arg_b")
+add_node = DFGNode(3, OP_ADD, "sum")
+
+push!(cdfg.nodes, in_a, in_b, add_node)
+push!(cdfg.input_nodes, in_a, in_b)
+push!(cdfg.output_nodes, add_node)
+
+# Add dependencies
+push!(cdfg.edges, DFGEdge(in_a, add_node, 0))
+push!(cdfg.edges, DFGEdge(in_b, add_node, 1))
+
+# Add state
+state = FSMState(1, "compute")
+state.operations = [add_node]
+push!(cdfg.states, state)
+cdfg.entry_state_id = 1
+
+# Step 2: Schedule
+schedule = schedule_asap!(cdfg)
+println("Total cycles: ", schedule.total_cycles)
+
+# Step 3: Bind resources
+bind_resources!(cdfg, schedule)
+
+# Step 4: Generate RTL
+rtl = generate_rtl(cdfg, schedule)
+
+# Step 5: Emit Verilog
+verilog = emit_verilog(rtl)
+println(verilog)
+
+# Write to file
+write_verilog(rtl, "vector_add.v")
+```
+
+### Analysis and Optimization
+
+```julia
+# Analyze the design
+println(generate_analysis_report(cdfg))
+
+# Get optimization suggestions
+for suggestion in suggest_optimizations(cdfg)
+    println("💡 ", suggestion)
+end
+
+# Check resource usage
+resources = analyze_resource_usage(cdfg)
+println("Operations: ", resources["operation_counts"])
+println("Resources: ", resources["resource_counts"])
+```
+
+### ILP Scheduling for Optimal Results
+
+```julia
+# Use optimal ILP scheduling instead of ASAP
+options = HLSOptions(
+    scheduling_algorithm=:ilp,
+    target_clock_mhz=100.0,
+    enable_resource_sharing=true
+)
+
+schedule = schedule_ilp!(cdfg; options=options)
+```
+
+### Simulation and Verification
+
+```julia
+# Generate testbench
+tb = emit_testbench(rtl)
+write(open("vector_add_tb.v", "w"), tb)
+
+# If Verilator is installed, run simulation
+result = simulate(rtl, Dict("arg_a" => 5, "arg_b" => 10))
+
+if result.success
+    println("Simulation passed!")
+    println("Output: ", result.outputs["out_1"])
+    println("Cycles: ", result.cycles)
+end
+
+# Verify against Julia reference
+function add_ref(a, b)
+    return a + b
+end
+
+verification = verify_rtl(rtl, add_ref; num_tests=100)
+println(generate_verification_report(verification))
+```
+
+### Memory Interface Generation
+
+```julia
+# Generate BRAM interface
+bram = generate_bram_interface("data_mem", 10, 32, 2, 1)
+println(bram)
+
+# Generate partitioned memory for high bandwidth
+pmem = generate_partitioned_memory("array", :cyclic, 4, 10, 32)
+println(pmem)
+
+# Generate FIFO for streaming
+fifo = generate_fifo_interface("input_stream", 32, 16)
+println(fifo)
+```
+
+### Complete Native HLS Workflow
+
+```julia
+using FPGACompiler
+using FPGACompiler.HLS
+using FPGACompiler.RTL
+using FPGACompiler.Sim
+
+# 1. Define kernel
+@fpga_kernel function my_kernel(A, B, n)
+    sum = 0.0f0
+    @pipeline for i in 1:n
+        @inbounds sum += A[i] * B[i]
+    end
+    return sum
+end
+
+# 2. Compile to LLVM IR
+mod = fpga_compile(my_kernel, Tuple{Vector{Float32}, Vector{Float32}, Int})
+
+# 3. Extract CDFG from LLVM (when LLVM module extraction is complete)
+# cdfg = build_cdfg(mod)
+
+# 4. Schedule and bind
+# schedule = schedule_ilp!(cdfg)
+# bind_resources!(cdfg, schedule)
+
+# 5. Generate Verilog
+# rtl = generate_rtl(cdfg, schedule)
+# write_verilog(rtl, "my_kernel.v")
+
+# 6. Simulate and verify
+# result = verify_rtl(rtl, (A, B) -> sum(A .* B))
+```
+
 ## Next Steps
 
 - See [API Reference](api.md) for complete function documentation

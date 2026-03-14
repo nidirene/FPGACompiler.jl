@@ -121,7 +121,17 @@ bitwidth(x::FixedInt) = bitwidth(typeof(x))
 
 # Basic conversions
 Base.convert(::Type{FixedInt{N, T}}, x::Integer) where {N, T} = FixedInt{N, T}(x)
-Base.convert(::Type{T}, x::FixedInt{N, T}) where {N, T} = x.value
+
+# Convert FixedInt to its underlying storage type
+# Use explicit type to avoid ambiguity with convert(::Type{T}, ::Number)
+Base.convert(::Type{Int8}, x::FixedInt{N, Int8}) where {N} = x.value
+Base.convert(::Type{Int16}, x::FixedInt{N, Int16}) where {N} = x.value
+Base.convert(::Type{Int32}, x::FixedInt{N, Int32}) where {N} = x.value
+Base.convert(::Type{Int64}, x::FixedInt{N, Int64}) where {N} = x.value
+Base.convert(::Type{UInt8}, x::FixedInt{N, UInt8}) where {N} = x.value
+Base.convert(::Type{UInt16}, x::FixedInt{N, UInt16}) where {N} = x.value
+Base.convert(::Type{UInt32}, x::FixedInt{N, UInt32}) where {N} = x.value
+Base.convert(::Type{UInt64}, x::FixedInt{N, UInt64}) where {N} = x.value
 
 # Promotion rules
 Base.promote_rule(::Type{FixedInt{N, T}}, ::Type{<:Integer}) where {N, T} = T

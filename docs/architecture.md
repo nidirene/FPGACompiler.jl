@@ -17,6 +17,8 @@ FPGACompiler.jl extends [GPUCompiler.jl](https://github.com/JuliaGPU/GPUCompiler
 
 ## Source Files
 
+### Core Modules
+
 | File | Purpose |
 |------|---------|
 | `src/target.jl` | `FPGATarget` and `FPGACompilerParams` - extends `GPUCompiler.AbstractCompilerTarget` |
@@ -24,6 +26,36 @@ FPGACompiler.jl extends [GPUCompiler.jl](https://github.com/JuliaGPU/GPUCompiler
 | `src/optimize.jl` | Overrides `GPUCompiler.optimize!` with Phase 1 (canonicalization) and Phase 2 (dependency analysis) LLVM passes |
 | `src/metadata.jl` | Phase 3 functions to inject HLS metadata (`apply_pipeline_metadata!`, `apply_partition_metadata!`) |
 | `src/compiler.jl` | User-facing API (`fpga_compile`, `fpga_code_llvm`, `fpga_code_native`) and macros (`@fpga_kernel`, `@pipeline`, `@unroll`) |
+
+### HLS Backend (`src/hls/`)
+
+| File | Purpose |
+|------|---------|
+| `src/hls/types.jl` | Core HLS data structures: `CDFG`, `DFGNode`, `FSMState`, `Schedule`, `HLSOptions` |
+| `src/hls/cfg.jl` | CFG extraction from LLVM IR, creating FSM states from basic blocks |
+| `src/hls/dfg.jl` | DFG extraction from LLVM instructions, building operation nodes and edges |
+| `src/hls/cdfg.jl` | Combined CDFG construction, validation, and critical path analysis |
+| `src/hls/schedule.jl` | Scheduling algorithms: ASAP, ALAP, List Scheduling, ILP (JuMP.jl), Modulo |
+| `src/hls/binding.jl` | Resource binding with left-edge algorithm, register allocation |
+| `src/hls/analysis.jl` | Analysis utilities: resource usage, parallelism, memory patterns, optimization suggestions |
+
+### RTL Generation (`src/rtl/`)
+
+| File | Purpose |
+|------|---------|
+| `src/rtl/module.jl` | RTL module structure generation, port/signal declarations |
+| `src/rtl/fsm.jl` | FSM Verilog generation with state transitions and cycle counting |
+| `src/rtl/datapath.jl` | Datapath generation: ALU operations, pipeline registers, muxes |
+| `src/rtl/memory.jl` | Memory interface generation: BRAM, partitioned memory, FIFO |
+| `src/rtl/emit.jl` | Verilog emission, testbench generation, Verilator integration |
+
+### Simulation (`src/sim/`)
+
+| File | Purpose |
+|------|---------|
+| `src/sim/verilator.jl` | Verilator compilation and execution, VCD parsing |
+| `src/sim/testbench.jl` | Test vector generation, directed tests, coverage points |
+| `src/sim/verify.jl` | RTL verification against Julia references, equivalence checking |
 
 ## Compilation Pipeline
 
@@ -322,9 +354,143 @@ all_passes = vcat(phase1_passes, custom_passes, phase2_passes)
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
+## HLS Backend Architecture
+
+The HLS backend provides a complete native Julia implementation for High-Level Synthesis, bypassing proprietary vendor tools.
+
+### HLS Pipeline Overview
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   LLVM IR   │───▶│    CDFG     │───▶│  Scheduled  │───▶│   Verilog   │
+│   Module    │    │  Extraction │    │    CDFG     │    │    RTL      │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+      │                  │                  │                  │
+      │                  │                  │                  │
+  LLVM.jl            cfg.jl            schedule.jl         emit.jl
+                     dfg.jl            binding.jl
+                     cdfg.jl
+```
+
+### CDFG Construction
+
+The Combined Control and Data Flow Graph (CDFG) captures both control flow (FSM) and data flow (datapath):
+
+1. **CFG Extraction** (`cfg.jl`):
+   - Each LLVM BasicBlock becomes an FSM state
+   - Branch instructions determine state transitions
+   - Back-edges identify loops for pipelining
+
+2. **DFG Extraction** (`dfg.jl`):
+   - Each LLVM instruction becomes a DFGNode
+   - Use-def chains become DFGEdges
+   - Operation types map to hardware resources
+
+3. **CDFG Integration** (`cdfg.jl`):
+   - Operations are assigned to states
+   - Critical path is computed
+   - Dependencies are validated
+
+### Scheduling Algorithms
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Scheduling Options                         │
+├──────────────────────────────────────────────────────────────┤
+│  ASAP       │  As-Soon-As-Possible - Minimize latency        │
+│  ALAP       │  As-Late-As-Possible - Compute scheduling slack │
+│  List       │  Resource-constrained heuristic scheduling     │
+│  ILP        │  Optimal scheduling via JuMP.jl + HiGHS        │
+│  Modulo     │  Pipelined loop scheduling with target II      │
+└──────────────────────────────────────────────────────────────┘
+```
+
+#### ILP Scheduling Model
+
+The ILP scheduler formulates scheduling as an optimization problem:
+
+**Variables:**
+- `x[i,t]` ∈ {0,1}: Operation i starts at cycle t
+
+**Objective:**
+- Minimize: total latency (maximum completion time)
+
+**Constraints:**
+- Each operation scheduled exactly once
+- Dependencies respected (producer completes before consumer)
+- Resource constraints per cycle
+
+### Resource Binding
+
+The left-edge algorithm minimizes resource instances:
+
+1. Sort operations by start time
+2. For each operation:
+   - Find available resource instance (end_time ≤ start_time)
+   - If none available, allocate new instance
+3. Track end times for each instance
+
+```
+Time:   0   1   2   3   4   5
+        ├───┼───┼───┼───┼───┤
+ALU_1:  [op1]   [op3]   [op5]
+ALU_2:      [op2]   [op4]
+```
+
+### RTL Generation
+
+The RTL module generates synthesizable Verilog with:
+
+1. **FSM**: Moore machine with state register, next-state logic
+2. **Datapath**: Combinational and registered operations
+3. **Memory Interface**: BRAM ports, address/data muxing
+4. **Output Logic**: Done signal, output port assignments
+
+```verilog
+module generated_kernel (
+    input wire clk,
+    input wire rst,
+    input wire start,
+    output reg done,
+    // ... ports
+);
+    // State encoding
+    localparam IDLE = 0, S_COMPUTE = 1, DONE = 2;
+
+    // FSM
+    always @(posedge clk) ...
+
+    // Datapath
+    always @(posedge clk) ...
+
+    // Outputs
+    assign done = (current_state == DONE);
+endmodule
+```
+
+### Simulation Integration
+
+The simulation module integrates with Verilator for cycle-accurate verification:
+
+```
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   Generate   │───▶│   Verilator  │───▶│   Execute    │
+│   Verilog    │    │   Compile    │    │   Simulate   │
+└──────────────┘    └──────────────┘    └──────────────┘
+                                              │
+                                              ▼
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│   Verify vs  │◀───│   Parse      │◀───│   Capture    │
+│   Reference  │    │   Outputs    │    │   Results    │
+└──────────────┘    └──────────────┘    └──────────────┘
+```
+
 ## Dependencies
 
 | Package | Version | Purpose |
 |---------|---------|---------|
 | GPUCompiler.jl | 1.x | Julia GPU compilation framework |
 | LLVM.jl | 9.x | Julia wrapper for LLVM C API |
+| Graphs.jl | 1.x | Graph data structures for CDFG |
+| JuMP.jl | 1.x | Mathematical optimization modeling |
+| HiGHS.jl | 1.x | ILP solver for optimal scheduling |

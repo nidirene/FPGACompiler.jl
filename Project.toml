@@ -4,12 +4,20 @@ authors = ["Your Name <your.email@example.com>"]
 version = "0.1.0"
 
 [deps]
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 GPUCompiler = "61eb1bfa-7361-4325-ad38-22787b887f55"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
 LLVM = "929cbde3-209d-540e-8aea-75f648917ca0"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [compat]
 GPUCompiler = "1"
+Graphs = "1"
+HiGHS = "1"
+JuMP = "1"
 LLVM = "9"
 julia = "1.10"
 

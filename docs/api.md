@@ -9,6 +9,9 @@ This document provides a complete reference for all exported functions, types, a
 - [Macros](#macros)
 - [Metadata Functions](#metadata-functions)
 - [Utility Functions](#utility-functions)
+- [HLS Backend](#hls-backend)
+- [RTL Generation](#rtl-generation)
+- [Simulation](#simulation)
 
 ---
 
@@ -421,3 +424,594 @@ A dictionary with estimated resource counts:
 resources = estimate_resources(my_kernel, Tuple{Vector{Float32}, Int})
 println("Estimated DSPs: ", resources["estimated_dsps"])
 ```
+
+---
+
+## HLS Backend
+
+The HLS backend provides a native Julia implementation for High-Level Synthesis, bypassing vendor tools.
+
+### HLS Types
+
+#### `CDFG`
+
+```julia
+mutable struct CDFG
+    name::String
+    nodes::Vector{DFGNode}
+    edges::Vector{DFGEdge}
+    states::Vector{FSMState}
+    ...
+end
+```
+
+Combined Control and Data Flow Graph - the central intermediate representation for HLS.
+
+**Constructor:**
+```julia
+cdfg = CDFG("kernel_name")
+```
+
+---
+
+#### `DFGNode`
+
+```julia
+mutable struct DFGNode
+    id::Int
+    op::OperationType
+    name::String
+    bit_width::Int
+    is_signed::Bool
+    scheduled_cycle::Int
+    latency::Int
+    ...
+end
+```
+
+Represents a single operation in the Data Flow Graph.
+
+**Constructor:**
+```julia
+node = DFGNode(id, op, name)
+```
+
+---
+
+#### `FSMState`
+
+```julia
+mutable struct FSMState
+    id::Int
+    name::String
+    operations::Vector{DFGNode}
+    successor_ids::Vector{Int}
+    ...
+end
+```
+
+Represents one state in the hardware Finite State Machine.
+
+**Constructor:**
+```julia
+state = FSMState(id, name)
+```
+
+---
+
+#### `HLSOptions`
+
+```julia
+struct HLSOptions
+    scheduling_algorithm::Symbol  # :asap, :alap, :list, :ilp
+    target_ii::Int
+    target_clock_mhz::Float64
+    constraints::ResourceConstraints
+    enable_pipelining::Bool
+    enable_resource_sharing::Bool
+    ...
+end
+```
+
+Configuration options for HLS synthesis.
+
+**Constructor:**
+```julia
+opts = HLSOptions(
+    scheduling_algorithm=:ilp,
+    target_clock_mhz=100.0,
+    enable_pipelining=true
+)
+```
+
+---
+
+#### `ResourceConstraints`
+
+```julia
+struct ResourceConstraints
+    max_alus::Int
+    max_dsps::Int
+    max_fpus::Int
+    max_dividers::Int
+    max_bram_read_ports::Int
+    max_bram_write_ports::Int
+    ...
+end
+```
+
+Hardware resource limits for scheduling.
+
+**Constructor:**
+```julia
+constraints = ResourceConstraints(max_alus=8, max_dsps=4)
+```
+
+---
+
+### Scheduling Functions
+
+#### `schedule_asap!`
+
+```julia
+schedule_asap!(cdfg::CDFG) -> Schedule
+```
+
+Schedule operations as-soon-as-possible. Minimizes latency but may exceed resource constraints.
+
+---
+
+#### `schedule_alap!`
+
+```julia
+schedule_alap!(cdfg::CDFG) -> Schedule
+```
+
+Schedule operations as-late-as-possible. Useful for computing scheduling slack.
+
+---
+
+#### `schedule_list!`
+
+```julia
+schedule_list!(cdfg::CDFG, constraints::ResourceConstraints) -> Schedule
+```
+
+List scheduling with resource constraints. Balances latency with resource limits.
+
+---
+
+#### `schedule_ilp!`
+
+```julia
+schedule_ilp!(cdfg::CDFG; options::HLSOptions=HLSOptions()) -> Schedule
+```
+
+Optimal scheduling using Integer Linear Programming (JuMP.jl + HiGHS).
+
+---
+
+### Resource Binding
+
+#### `bind_resources!`
+
+```julia
+bind_resources!(cdfg::CDFG, schedule::Schedule)
+```
+
+Bind operations to physical hardware resources using the left-edge algorithm.
+
+---
+
+#### `get_resource_count`
+
+```julia
+get_resource_count(cdfg::CDFG) -> Dict{ResourceType, Int}
+```
+
+Get the number of each resource type needed after binding.
+
+---
+
+### Analysis Functions
+
+#### `analyze_critical_path`
+
+```julia
+analyze_critical_path(cdfg::CDFG) -> Dict{String, Any}
+```
+
+Analyze the critical path and identify bottlenecks.
+
+**Returns:**
+- `"length"`: Critical path length in cycles
+- `"nodes"`: Node names on critical path
+- `"bottlenecks"`: High-latency operations
+
+---
+
+#### `analyze_resource_usage`
+
+```julia
+analyze_resource_usage(cdfg::CDFG) -> Dict{String, Any}
+```
+
+Analyze resource usage and identify optimization opportunities.
+
+---
+
+#### `analyze_parallelism`
+
+```julia
+analyze_parallelism(cdfg::CDFG) -> Dict{String, Any}
+```
+
+Analyze available parallelism (ILP) in the CDFG.
+
+---
+
+#### `suggest_optimizations`
+
+```julia
+suggest_optimizations(cdfg::CDFG) -> Vector{String}
+```
+
+Suggest optimizations based on CDFG analysis.
+
+---
+
+#### `generate_analysis_report`
+
+```julia
+generate_analysis_report(cdfg::CDFG) -> String
+```
+
+Generate a comprehensive human-readable analysis report.
+
+---
+
+## RTL Generation
+
+The RTL module generates synthesizable Verilog from scheduled CDFGs.
+
+### RTL Types
+
+#### `RTLModule`
+
+```julia
+mutable struct RTLModule
+    name::String
+    ports::Vector{RTLPort}
+    signals::Vector{RTLSignal}
+    state_names::Vector{String}
+    ...
+end
+```
+
+Represents the complete generated hardware module.
+
+---
+
+#### `RTLPort`
+
+```julia
+struct RTLPort
+    name::String
+    bit_width::Int
+    is_input::Bool
+    is_signed::Bool
+end
+```
+
+Represents a port in the RTL module.
+
+---
+
+#### `RTLSignal`
+
+```julia
+struct RTLSignal
+    name::String
+    bit_width::Int
+    is_register::Bool
+    is_signed::Bool
+    initial_value::Union{Int, Nothing}
+end
+```
+
+Represents an internal signal (wire or register).
+
+---
+
+### Generation Functions
+
+#### `generate_rtl`
+
+```julia
+generate_rtl(cdfg::CDFG, schedule::Schedule; options::HLSOptions=HLSOptions()) -> RTLModule
+```
+
+Generate RTL module from a scheduled CDFG.
+
+---
+
+#### `generate_verilog`
+
+```julia
+generate_verilog(cdfg::CDFG, schedule::Schedule; options::HLSOptions=HLSOptions()) -> String
+```
+
+High-level function to generate complete Verilog from CDFG.
+
+---
+
+#### `emit_verilog`
+
+```julia
+emit_verilog(rtl::RTLModule) -> String
+```
+
+Emit complete Verilog module as a string.
+
+---
+
+#### `write_verilog`
+
+```julia
+write_verilog(rtl::RTLModule, filepath::String)
+```
+
+Write Verilog module to a file.
+
+---
+
+#### `emit_testbench`
+
+```julia
+emit_testbench(rtl::RTLModule; num_test_vectors::Int=10) -> String
+```
+
+Generate a Verilog testbench for the module.
+
+---
+
+### Memory Interface Generators
+
+#### `generate_bram_interface`
+
+```julia
+generate_bram_interface(name::String, addr_width::Int, data_width::Int,
+                        num_read_ports::Int, num_write_ports::Int) -> String
+```
+
+Generate BRAM interface module for a specific memory.
+
+---
+
+#### `generate_partitioned_memory`
+
+```julia
+generate_partitioned_memory(name::String, partition_type::Symbol, factor::Int,
+                            addr_width::Int, data_width::Int) -> String
+```
+
+Generate partitioned memory for increased bandwidth.
+
+---
+
+#### `generate_fifo_interface`
+
+```julia
+generate_fifo_interface(name::String, data_width::Int, depth::Int) -> String
+```
+
+Generate FIFO interface for streaming data.
+
+---
+
+## Simulation
+
+The Sim module provides Verilator integration and verification utilities.
+
+### Simulation Types
+
+#### `VerilatorConfig`
+
+```julia
+struct VerilatorConfig
+    verilator_path::String
+    trace_enabled::Bool
+    trace_depth::Int
+    optimization_level::Int
+    ...
+end
+```
+
+Configuration for Verilator simulation.
+
+**Constructor:**
+```julia
+config = VerilatorConfig(trace_enabled=true, optimization_level=3)
+```
+
+---
+
+#### `SimulationResult`
+
+```julia
+struct SimulationResult
+    success::Bool
+    output::String
+    error_output::String
+    exit_code::Int
+    cycles::Int
+    outputs::Dict{String, Any}
+    vcd_file::Union{String, Nothing}
+end
+```
+
+Result of a Verilator simulation run.
+
+---
+
+#### `VerificationResult`
+
+```julia
+struct VerificationResult
+    passed::Bool
+    total_tests::Int
+    passed_tests::Int
+    failed_tests::Int
+    failures::Vector{Dict{String, Any}}
+    coverage::Dict{String, Float64}
+end
+```
+
+Result of RTL verification against a reference.
+
+---
+
+#### `TestVector`
+
+```julia
+struct TestVector
+    inputs::Dict{String, Any}
+    expected_outputs::Dict{String, Any}
+    name::String
+    timeout_cycles::Int
+end
+```
+
+A single test vector with inputs and expected outputs.
+
+---
+
+### Simulation Functions
+
+#### `simulate`
+
+```julia
+simulate(rtl::RTLModule, inputs::Dict{String, Any};
+         config::VerilatorConfig=VerilatorConfig()) -> SimulationResult
+```
+
+High-level simulation: compile and run in one step.
+
+**Example:**
+```julia
+result = simulate(rtl, Dict("a" => 5, "b" => 10))
+if result.success
+    println("Output: ", result.outputs["out_1"])
+    println("Cycles: ", result.cycles)
+end
+```
+
+---
+
+#### `compile_verilator`
+
+```julia
+compile_verilator(verilog_file::String, output_dir::String;
+                  config::VerilatorConfig=VerilatorConfig())
+```
+
+Compile Verilog with Verilator.
+
+---
+
+#### `run_verilator`
+
+```julia
+run_verilator(executable::String, args::Vector{String}=String[];
+              timeout_seconds::Int=60) -> SimulationResult
+```
+
+Run a compiled Verilator simulation.
+
+---
+
+### Test Generation
+
+#### `generate_test_vectors`
+
+```julia
+generate_test_vectors(rtl::RTLModule; num_random::Int=10, seed::Int=42) -> Vector{TestVector}
+```
+
+Generate random test vectors for a module.
+
+---
+
+#### `generate_test_vectors_from_function`
+
+```julia
+generate_test_vectors_from_function(rtl::RTLModule, ref_func::Function;
+                                    num_random::Int=10) -> Vector{TestVector}
+```
+
+Generate test vectors by calling a reference Julia function.
+
+---
+
+#### `generate_directed_tests`
+
+```julia
+generate_directed_tests(rtl::RTLModule, scenarios::Vector{Symbol}) -> Vector{TestVector}
+```
+
+Generate directed tests for specific scenarios (`:zeros`, `:ones`, `:alternating`, etc.).
+
+---
+
+### Verification Functions
+
+#### `verify_rtl`
+
+```julia
+verify_rtl(rtl::RTLModule, ref_func::Function;
+           num_tests::Int=100) -> VerificationResult
+```
+
+Verify RTL implementation against a Julia reference function.
+
+**Example:**
+```julia
+function add_ref(a, b)
+    return a + b
+end
+
+result = verify_rtl(rtl, add_ref; num_tests=100)
+println(generate_verification_report(result))
+```
+
+---
+
+#### `compare_results`
+
+```julia
+compare_results(expected::Dict{String, Any}, actual::Dict{String, Any};
+                tolerance::Float64=0.0) -> Tuple{Bool, Vector{String}}
+```
+
+Compare expected and actual results with optional tolerance.
+
+---
+
+#### `equivalence_check`
+
+```julia
+equivalence_check(rtl1::RTLModule, rtl2::RTLModule;
+                  num_tests::Int=100) -> VerificationResult
+```
+
+Check if two RTL modules are functionally equivalent.
+
+---
+
+#### `generate_verification_report`
+
+```julia
+generate_verification_report(result::VerificationResult) -> String
+```
+
+Generate a human-readable verification report.
