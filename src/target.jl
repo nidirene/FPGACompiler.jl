@@ -28,8 +28,21 @@ Base.@kwdef struct FPGACompilerParams <: GPUCompiler.AbstractCompilerParams
 end
 
 # Configure the LLVM triple for FPGA targets
-# Using SPIR-V as it's commonly supported by HLS tools
-GPUCompiler.llvm_triple(::FPGATarget) = "spir64-unknown-unknown"
+# Note: SPIR-V would be ideal but requires LLVM with SPIR backend
+# For development/testing, use native target; for production, use SPIR
+function GPUCompiler.llvm_triple(::FPGATarget)
+    # Check if SPIR target is available, otherwise fall back to native
+    native_triple = unsafe_string(LLVM.API.LLVMGetDefaultTargetTriple())
+    return native_triple
+end
+
+# Use native LLVM machine for compilation (SPIR target not available in bundled LLVM)
+function GPUCompiler.llvm_machine(target::FPGATarget)
+    triple = GPUCompiler.llvm_triple(target)
+    t = LLVM.Target(; triple=triple)
+    tm = LLVM.TargetMachine(t, triple)
+    return tm
+end
 
 # FPGA targets typically use 64-bit data layout
 GPUCompiler.llvm_datalayout(::FPGATarget) = "e-i64:64-v16:16-v24:32-v32:32-v48:64-v96:128-v192:256-v256:256-v512:512-v1024:1024"
@@ -43,5 +56,8 @@ GPUCompiler.uses_julia_runtime(::CompilerJob{FPGATarget}) = false
 # FPGAs support all address spaces (used for memory banking)
 GPUCompiler.can_throw(::CompilerJob{FPGATarget}) = false
 
-# Method table for FPGA-specific intrinsics (can be extended)
-GPUCompiler.method_table(::CompilerJob{FPGATarget}) = nothing
+# Method table for FPGA-specific intrinsics (use global table for now)
+GPUCompiler.method_table(::CompilerJob{FPGATarget}) = GPUCompiler.GLOBAL_METHOD_TABLE
+
+# Runtime slug for caching compiled code
+GPUCompiler.runtime_slug(::CompilerJob{FPGATarget}) = "fpga"

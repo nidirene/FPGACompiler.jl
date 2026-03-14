@@ -120,12 +120,20 @@ mod = fpga_compile(vadd, Tuple{Vector{Float32}, Vector{Float32}, Vector{Float32}
 ```
 """
 function fpga_compile(f, types::Type{<:Tuple}; params=FPGACompilerParams())
-    # Create compilation job
+    # Create compilation job using new GPUCompiler API
     target = FPGATarget()
-    job = GPUCompiler.CompilerJob(target, f, types; params=params)
 
-    # Compile to LLVM IR
-    mod, meta = GPUCompiler.compile(:llvm, job)
+    # Get method instance for the function
+    mi = GPUCompiler.methodinstance(typeof(f), types)
+
+    # Create compiler config and job
+    config = GPUCompiler.CompilerConfig(target, params)
+    job = GPUCompiler.CompilerJob(mi, config)
+
+    # Compile to LLVM IR within a JuliaContext
+    mod, meta = GPUCompiler.JuliaContext() do ctx
+        GPUCompiler.compile(:llvm, job)
+    end
 
     return mod
 end

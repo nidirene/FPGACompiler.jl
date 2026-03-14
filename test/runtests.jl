@@ -154,18 +154,22 @@ import FPGACompiler: get_pipeline_hint, get_unroll_hint, is_registered_kernel, c
     include("metadata_tests.jl")
     include("integration_tests.jl")
 
+    # Phase 4: HLS Backend tests
+    include("hls_tests.jl")
+    include("rtl_tests.jl")
+    include("sim_tests.jl")
+
     # Integration tests require GPUCompiler and LLVM to be properly set up
     # These are marked as broken until the full toolchain is available
 
     @testset "Compilation (requires LLVM)" begin
-        # Simple test function
-        function vadd_simple(a, b)
-            return a + b
+        # Simple bitstype kernel (must return nothing)
+        function vadd_simple(a::Float32, b::Float32)
+            c = a + b
+            return nothing
         end
 
-        # This test would verify that compilation works
-        # @test_nowarn fpga_compile(vadd_simple, Tuple{Float32, Float32})
-
-        @test_skip "Requires full GPUCompiler setup"
+        # Test that compilation works
+        @test_nowarn fpga_compile(vadd_simple, Tuple{Float32, Float32})
     end
 end
