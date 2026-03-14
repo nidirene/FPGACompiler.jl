@@ -10,7 +10,10 @@ FPGACompiler.jl enables writing FPGA kernels in pure Julia by:
 2. Using `GPUCompiler.jl` to intercept the compilation pipeline
 3. Running FPGA-specific LLVM optimization passes
 4. Injecting HLS metadata for pipelining, memory partitioning, and bit-width optimization
-5. Outputting clean LLVM IR for vendor HLS tools (Intel oneAPI, AMD Vitis, Bambu)
+5. **Native HLS backend** with ASAP/ALAP/list/ILP scheduling and resource binding
+6. **RTL generation** producing synthesizable Verilog
+7. **Simulation** via Verilator integration
+8. Outputting clean LLVM IR for vendor HLS tools (Intel oneAPI, AMD Vitis, Bambu)
 
 ## Installation
 
@@ -91,6 +94,32 @@ Injects HLS-specific metadata into the LLVM IR:
 - Interface specifications (AXI, BRAM, Stream)
 - Bit-width annotations
 
+### Phase 4: Native HLS Backend
+
+A pure Julia HLS implementation that bypasses vendor tools:
+
+- **CDFG Construction** - Combined Control and Data Flow Graph from IR
+- **Scheduling** - ASAP, ALAP, list scheduling, and ILP-based optimal scheduling
+- **Resource Binding** - Maps operations to functional units with sharing
+- **FSM Generation** - Synthesizes control state machines
+
+### Phase 5: RTL Generation
+
+Produces synthesizable Verilog from the scheduled CDFG:
+
+- **Datapath** - Functional units, multiplexers, registers
+- **FSM** - State machine with one-hot or binary encoding
+- **Memory Interfaces** - BRAM controllers with banking support
+- **Top Module** - Integrates datapath, FSM, and memories
+
+### Phase 6: Simulation
+
+Verifies generated RTL with Verilator:
+
+- **Testbench Generation** - Automatic C++ testbenches
+- **Verilator Integration** - Compile and run simulations
+- **Waveform Output** - VCD traces for debugging
+
 ## Features
 
 ### Custom Bit-Width Types
@@ -143,6 +172,50 @@ Partition styles:
 end
 ```
 
+### Native HLS Flow
+
+Generate Verilog directly without vendor tools:
+
+```julia
+using FPGACompiler
+using FPGACompiler.HLS
+using FPGACompiler.RTL
+
+# Build CDFG from operations
+cdfg = CDFG("my_kernel")
+add_operation!(cdfg, :add, :a, :b, :sum)
+add_operation!(cdfg, :mul, :sum, :c, :result)
+
+# Schedule with resource constraints
+schedule = schedule_list!(cdfg, ResourceConstraints(adders=1, multipliers=1))
+
+# Bind resources
+bind_resources!(cdfg, schedule)
+
+# Generate Verilog
+rtl_module = generate_rtl(cdfg)
+verilog = emit_verilog(rtl_module)
+write("my_kernel.v", verilog)
+```
+
+### Simulation
+
+Verify RTL with Verilator:
+
+```julia
+using FPGACompiler.Sim
+
+# Generate testbench
+tb = generate_testbench(rtl_module, [
+    (a=1.0f0, b=2.0f0, c=3.0f0),  # Test vector 1
+    (a=4.0f0, b=5.0f0, c=6.0f0),  # Test vector 2
+])
+
+# Run simulation
+result = run_verilator(rtl_module, tb)
+@assert result.passed
+```
+
 ### Compiler Parameters
 
 ```julia
@@ -184,6 +257,34 @@ fpga_compile(my_kernel, types; params=params)
 | `PartitionedArray{T,N,Factor,Style}` | Array with partitioning hints |
 | `Int7`, `Int12`, etc. | Arbitrary bit-width integers |
 
+### HLS Module (`FPGACompiler.HLS`)
+
+| Function | Description |
+|----------|-------------|
+| `CDFG(name)` | Create Control/Data Flow Graph |
+| `schedule_asap!(cdfg)` | As-soon-as-possible scheduling |
+| `schedule_alap!(cdfg)` | As-late-as-possible scheduling |
+| `schedule_list!(cdfg, constraints)` | List scheduling with resource limits |
+| `schedule_ilp!(cdfg)` | Optimal ILP-based scheduling |
+| `bind_resources!(cdfg, schedule)` | Map operations to functional units |
+
+### RTL Module (`FPGACompiler.RTL`)
+
+| Function | Description |
+|----------|-------------|
+| `generate_rtl(cdfg)` | Generate RTL module from scheduled CDFG |
+| `emit_verilog(module)` | Emit Verilog source code |
+| `generate_fsm(cdfg)` | Generate FSM controller |
+| `generate_datapath(cdfg)` | Generate datapath logic |
+
+### Simulation Module (`FPGACompiler.Sim`)
+
+| Function | Description |
+|----------|-------------|
+| `generate_testbench(module, vectors)` | Create C++ testbench |
+| `run_verilator(module, testbench)` | Compile and simulate with Verilator |
+| `verify_output(expected, actual)` | Compare simulation results |
+
 ## Limitations
 
 - **No dynamic memory allocation** - All arrays must be fixed-size
@@ -204,6 +305,9 @@ fpga_compile(my_kernel, types; params=params)
 
 - [GPUCompiler.jl](https://github.com/JuliaGPU/GPUCompiler.jl) - Julia GPU compilation framework
 - [LLVM.jl](https://github.com/maleadt/LLVM.jl) - Julia wrapper for LLVM C API
+- [Graphs.jl](https://github.com/JuliaGraphs/Graphs.jl) - Graph data structures for CFG/DFG
+- [JuMP.jl](https://github.com/jump-dev/JuMP.jl) - Mathematical optimization for ILP scheduling
+- [HiGHS.jl](https://github.com/jump-dev/HiGHS.jl) - High-performance LP/MIP solver
 
 ## Documentation
 
@@ -232,7 +336,8 @@ Contributions are welcome! Areas of interest:
 
 - Additional LLVM optimization passes
 - Vendor-specific metadata formats
-- Verilog simulation integration (inspired by [Verilog.jl](https://github.com/interplanetary-robot/Verilog.jl))
+- Additional scheduling algorithms (force-directed, modulo scheduling)
+- FPGA vendor backend integration (Vivado, Quartus)
 - Resource estimation improvements
 
 ## License
