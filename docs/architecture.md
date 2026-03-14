@@ -56,6 +56,18 @@ FPGACompiler.jl extends [GPUCompiler.jl](https://github.com/JuliaGPU/GPUCompiler
 | `src/sim/verilator.jl` | Verilator compilation and execution, VCD parsing |
 | `src/sim/testbench.jl` | Test vector generation, directed tests, coverage points |
 | `src/sim/verify.jl` | RTL verification against Julia references, equivalence checking |
+| `src/sim/native/` | Native Julia RTL simulator (types, primitives, waveform) |
+
+### CoDesign (`src/codesign/`)
+
+| File | Purpose |
+|------|---------|
+| `src/codesign/CoDesign.jl` | Module entry point, exports, convenience functions |
+| `src/codesign/dse.jl` | DSEParameters, WorkloadDescriptor, DSE sweep functions |
+| `src/codesign/virtual_device.jl` | VirtualFPGADevice, VirtualFPGAArray, VirtualPCIe |
+| `src/codesign/observables.jl` | SimulatorObservables, DSEObservables, ParetoObservables |
+| `src/codesign/parametric_sim.jl` | ParametricSimulator for fast DSE without LLVM |
+| `src/codesign/full_pipeline.jl` | CompiledKernel, CoDesignKernel, full pipeline integration |
 
 ## Compilation Pipeline
 
@@ -485,6 +497,63 @@ The simulation module integrates with Verilator for cycle-accurate verification:
 └──────────────┘    └──────────────┘    └──────────────┘
 ```
 
+## CoDesign Architecture
+
+The CoDesign module provides hardware-software co-design capabilities for rapid Design Space Exploration without full FPGA compilation.
+
+### CoDesign Pipeline Overview
+
+```
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  Workload   │───▶│  Parametric │───▶│  DSE        │
+│  Descriptor │    │  Simulator  │    │  Results    │
+└─────────────┘    └─────────────┘    └─────────────┘
+                         │
+                    Fast Path (no LLVM)
+
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│   Julia     │───▶│   CDFG      │───▶│   Native    │───▶│  Cycle-     │
+│   Function  │    │  Schedule   │    │  Simulator  │    │  Accurate   │
+└─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
+                         │
+                    Full Pipeline (LLVM compilation)
+```
+
+### Hybrid Simulation Approach
+
+The CoDesign module supports two simulation backends:
+
+1. **Parametric Simulation** (fast path):
+   - Uses `WorkloadDescriptor` to characterize kernels analytically
+   - No LLVM compilation required
+   - Estimates throughput, latency, and resource usage
+   - Suitable for rapid DSE sweeps (1000s of configurations)
+
+2. **Full Pipeline Simulation** (accurate path):
+   - Compiles Julia function through FPGACompiler pipeline
+   - Builds CDFG and schedules operations
+   - Uses NativeSimulator for cycle-accurate results
+   - Required for final verification
+
+### Observable Integration
+
+For interactive visualization with Makie.jl:
+
+```
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│ DSEObservables │──▶│  Simulator   │──▶│ ResultObservables │
+│ (UI Controls)│    │              │    │ (Live Charts)│
+└──────────────┘    └──────────────┘    └──────────────┘
+       │                                       │
+       └───────────────────────────────────────┘
+                 Reactive Data Flow
+```
+
+The Observable wrappers enable:
+- Live throughput/latency plots during simulation
+- Interactive DSE parameter sliders
+- Pareto frontier visualization
+
 ## Dependencies
 
 | Package | Version | Purpose |
@@ -494,3 +563,12 @@ The simulation module integrates with Verilator for cycle-accurate verification:
 | Graphs.jl | 1.x | Graph data structures for CDFG |
 | JuMP.jl | 1.x | Mathematical optimization modeling |
 | HiGHS.jl | 1.x | ILP solver for optimal scheduling |
+| Observables.jl | 0.5 | Reactive programming for CoDesign UI |
+
+### Optional Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| Makie.jl | Interactive visualization of DSE results |
+| GLMakie.jl | GPU-accelerated plotting backend |
+| Pluto.jl | Interactive notebook environment |

@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-03-14
+
+### Added
+
+#### Hardware-Software CoDesign Module
+- **CoDesign module** (`FPGACompiler.CoDesign`) for rapid DSE and co-design exploration
+- **Hybrid simulation approach**: parametric (fast) and full-pipeline (cycle-accurate) backends
+
+#### DSE Parameters & Workload Descriptors
+- `DSEParameters` for configuring unroll factor, initiation interval, BRAM ports, etc.
+- `WorkloadDescriptor` for characterizing kernel computation patterns
+- Convenience workload constructors: `conv2d_workload()`, `matmul_workload()`, `fir_filter_workload()`, `elementwise_workload()`, `reduction_workload()`
+
+#### Parametric Simulator
+- `ParametricSimulator` for quick performance estimation without LLVM compilation
+- `tick!(sim)`, `run!(sim)`, `reset!(sim)` - simulation control
+- `calculate_throughput()` - throughput estimation based on DSE parameters
+- `estimate_performance()` - quick performance estimates without full simulation
+
+#### DSE Sweep Functions
+- `sweep_unroll_factor()` - sweep unroll factor and collect metrics
+- `sweep_dse_space()` - multi-dimensional parameter sweep
+- `find_optimal_config()` - automatic optimization for throughput/latency/efficiency
+
+#### Virtual FPGA Device Abstractions
+- `VirtualFPGADevice` with preset configurations: `alveo_u200()`, `alveo_u280()`, `zynq_7020()`, `arty_a7()`
+- `VirtualFPGAArray{T,N}` - array type with FPGA memory semantics and access tracking
+- `VirtualPCIe` - PCIe transfer simulation for DMA timing estimation
+- Memory allocation, transfer simulation, and resource utilization tracking
+
+#### Observable Wrappers for Makie Integration
+- `SimulatorObservables` - reactive state management for live visualization
+- `DSEObservables` - observable DSE parameters for interactive control
+- `ParetoObservables` - Pareto frontier tracking for design space visualization
+- Throttled updates to prevent UI performance issues
+
+#### CoDesign Kernel Interface
+- `CoDesignKernel` - unified wrapper for both simulation backends
+- `simulate!(kernel; backend=:auto)` - run simulation with automatic backend selection
+- `estimate!(kernel)` - quick performance estimates
+- `run_dse_sweep(kernel)` - DSE exploration from kernel
+- `find_best_config(kernel)` - optimal configuration discovery
+
+#### Full Pipeline Integration
+- `compile_kernel(f, argtypes)` - compile through FPGACompiler pipeline
+- `CompiledKernel` - holds CDFG, schedule, and native simulator
+- `simulate_with_observables()` - cycle-accurate simulation with UI updates
+
+#### Convenience Functions
+- `quick_sim()` - one-liner performance estimation
+- `compare_configs()` - compare multiple DSE configurations
+- `create_kernel()` - factory function for flexible kernel creation
+- `print_summary()` - formatted kernel summary
+- `codesign_help()` - REPL help for CoDesign module
+
+#### Example Notebooks
+- `notebooks/dse_exploration.jl` - Pluto notebook demonstrating DSE workflow
+
+### Dependencies
+- Added Observables.jl v0.5 for reactive UI integration
+
 ## [0.3.0] - 2024-03-14
 
 ### Added
@@ -135,11 +196,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 0.4.0 | 2025-03-14 | Hardware-Software CoDesign Module |
 | 0.3.0 | 2024-03-14 | Native Julia RTL Simulator |
 | 0.2.0 | 2024-03-14 | RTL Generation Backend |
 | 0.1.0 | 2024-03-14 | Initial HLS Backend |
 
-[Unreleased]: https://github.com/yourusername/FPGACompiler.jl/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/yourusername/FPGACompiler.jl/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/yourusername/FPGACompiler.jl/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/yourusername/FPGACompiler.jl/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/yourusername/FPGACompiler.jl/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yourusername/FPGACompiler.jl/releases/tag/v0.1.0

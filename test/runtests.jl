@@ -162,6 +162,9 @@ import FPGACompiler: get_pipeline_hint, get_unroll_hint, is_registered_kernel, c
     # Phase 5: Native RTL Simulator tests
     include("native_sim_tests.jl")
 
+    # Phase 6: CoDesign Environment tests
+    include("codesign_tests.jl")
+
     # Integration tests require GPUCompiler and LLVM to be properly set up
     # These are marked as broken until the full toolchain is available
 

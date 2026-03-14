@@ -42,6 +42,11 @@ include("sim/Sim.jl")
 using .Sim
 export Sim
 
+# Include CoDesign submodule
+include("codesign/CoDesign.jl")
+using .CoDesign
+export CoDesign
+
 # Re-export key HLS types and functions
 export CDFG, DFGNode, FSMState, Schedule, HLSOptions, ResourceConstraints
 export build_cdfg, schedule_asap!, schedule_alap!, schedule_list!, schedule_ilp!
@@ -57,5 +62,12 @@ export emit_verilog, emit_testbench
 export simulate, run_verilator, compile_verilator
 export verify_rtl, VerificationResult
 export generate_test_vectors, run_testbench
+
+# Re-export key CoDesign types and functions
+export DSEParameters, WorkloadDescriptor
+export VirtualFPGADevice, VirtualFPGAArray
+export ParametricSimulator, CoDesignKernel
+export conv2d_workload, matmul_workload, fir_filter_workload
+export alveo_u200, alveo_u280, zynq_7020, arty_a7
 
 end # module FPGACompiler

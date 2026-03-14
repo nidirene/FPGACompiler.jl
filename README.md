@@ -13,7 +13,8 @@ FPGACompiler.jl enables writing FPGA kernels in pure Julia by:
 5. **Native HLS backend** with ASAP/ALAP/list/ILP scheduling and resource binding
 6. **RTL generation** producing synthesizable Verilog
 7. **Dual simulation backends**: Native Julia simulator and Verilator integration
-8. Outputting clean LLVM IR for vendor HLS tools (Intel oneAPI, AMD Vitis, Bambu)
+8. **Hardware-Software CoDesign** with interactive DSE exploration and Makie visualization
+9. Outputting clean LLVM IR for vendor HLS tools (Intel oneAPI, AMD Vitis, Bambu)
 
 ## Installation
 
@@ -130,6 +131,16 @@ The open-source Verilator compiles Verilog into extremely fast C++ simulation:
 - **High performance** - 10-100x faster than interpreted simulation
 - **Cycle-accurate** - Exact hardware behavior
 - **Waveform tracing** - Full signal visibility
+
+### Phase 7: Hardware-Software CoDesign
+
+Interactive design space exploration without full compilation:
+
+- **Parametric Simulation** - Fast performance estimation without LLVM
+- **DSE Sweeps** - Explore unroll factors, initiation intervals, BRAM ports
+- **Virtual Devices** - Simulate Alveo, Zynq, Arty targets
+- **Observable Integration** - Ready for Makie.jl live visualization
+- **Workload Patterns** - Conv2D, MatMul, FIR, and custom workloads
 
 ## Features
 
@@ -323,6 +334,182 @@ result = simulate(cdfg, schedule, Dict(:a => 10, :b => 5); backend=:native)
 
 # Verilator simulation (faster, requires Verilator installed)
 result = simulate(rtl_module, Dict("a" => 10, "b" => 5); backend=:verilator)
+```
+
+## Hardware-Software CoDesign
+
+The CoDesign module enables rapid design space exploration without full FPGA compilation.
+
+### Quick Start
+
+```julia
+using FPGACompiler.CoDesign
+
+# Define workload (no compilation needed)
+workload = conv2d_workload(kernel_size=3, img_height=28, img_width=28)
+
+# Configure DSE parameters
+dse = DSEParameters(unroll_factor=4, bram_ports=2, max_dsps=64)
+
+# Create kernel and get performance estimate
+kernel = CoDesignKernel("conv2d"; workload=workload, dse=dse)
+estimate = estimate!(kernel)
+
+println("Estimated cycles: $(estimate.estimated_cycles)")
+println("Throughput: $(estimate.estimated_throughput) items/cycle")
+println("Bottleneck: $(estimate.bottleneck)")
+```
+
+### Workload Patterns
+
+Define kernel characteristics without writing actual kernel code:
+
+```julia
+# 2D Convolution (image processing, ML)
+conv = conv2d_workload(kernel_size=5, img_height=224, img_width=224)
+
+# Matrix Multiplication
+matmul = matmul_workload(M=128, N=128, K=128)
+
+# FIR Filter (signal processing)
+fir = fir_filter_workload(taps=32, samples=4096)
+
+# Elementwise operations
+elem = elementwise_workload(height=10000, ops_per_element=3)
+
+# Reduction (sum, max, etc.)
+reduce = reduction_workload(length=1024)
+```
+
+### DSE Parameter Sweeps
+
+Explore the design space automatically:
+
+```julia
+using FPGACompiler.CoDesign
+
+workload = conv2d_workload(kernel_size=3)
+
+# Sweep unroll factors
+results = sweep_unroll_factor(workload, 1:16)
+for r in results
+    println("UF=$(r.unroll_factor): $(r.cycles) cycles, $(r.throughput) items/cycle")
+end
+
+# Multi-dimensional sweep
+points = sweep_dse_space(workload;
+    unroll_range = 1:8,
+    ii_range = 1:2,
+    bram_range = 1:4
+)
+
+# Find optimal configuration
+best = find_optimal_config(workload;
+    optimize_for = :throughput,  # or :latency, :efficiency
+    max_dsps = 64,
+    max_brams = 32
+)
+println("Best config: UF=$(best.unroll_factor), II=$(best.initiation_interval)")
+```
+
+### Virtual FPGA Devices
+
+Target specific FPGA platforms:
+
+```julia
+using FPGACompiler.CoDesign
+
+# Preset device configurations
+device = zynq_7020()       # Embedded: 220 DSPs, 140 BRAMs
+# device = arty_a7()       # Hobbyist: 90 DSPs, 50 BRAMs
+# device = alveo_u200()    # Datacenter: 6840 DSPs, 2160 BRAMs
+# device = alveo_u280()    # HBM: 9024 DSPs, 2016 BRAMs
+
+# Device-constrained optimization
+workload = matmul_workload(M=64, N=64, K=64)
+best = find_optimal_config(workload;
+    max_dsps = device.total_dsps,
+    max_brams = device.total_brams
+)
+
+# Check resource utilization
+util = resource_utilization(device)
+println("DSP utilization: $(util.dsps)%")
+```
+
+### Virtual Device Memory
+
+Simulate FPGA memory with access tracking:
+
+```julia
+using FPGACompiler.CoDesign
+
+device = VirtualFPGADevice("MyFPGA"; dsps=100, brams=50)
+
+# Allocate device memory
+input_data = allocate!(device, :input, Float32, (1024,))
+output_data = allocate!(device, :output, Float32, (1024,))
+
+# Simulate data transfer (returns cycle count)
+host_data = rand(Float32, 1024)
+transfer_cycles = copyto_device!(device, input_data, host_data)
+println("DMA transfer: $transfer_cycles cycles")
+
+# Track memory accesses
+enable_tracking!(input_data, true)
+# ... run kernel ...
+println("Total reads: $(input_data.total_reads)")
+```
+
+### Interactive Simulation with Observables
+
+The CoDesign module integrates with Makie.jl for live visualization:
+
+```julia
+using FPGACompiler.CoDesign
+
+workload = conv2d_workload(kernel_size=3, img_height=28, img_width=28)
+kernel = CoDesignKernel("conv2d"; workload=workload)
+
+# Observables update automatically during simulation
+obs = kernel.observables
+
+# These can be connected to Makie plots
+# obs.clock[]           # Current cycle
+# obs.progress[]        # 0-100%
+# obs.throughput[]      # Items per cycle
+# obs.pipeline[]        # Pipeline stage occupancy
+# obs.dsp_util[]        # DSP utilization %
+# obs.fsm_state[]       # FSM state name
+
+# Run simulation (observables update each cycle)
+result = simulate!(kernel; backend=:parametric)
+```
+
+### Full Pipeline Integration
+
+For cycle-accurate simulation, compile through the full FPGACompiler pipeline:
+
+```julia
+using FPGACompiler
+using FPGACompiler.CoDesign
+
+# Define actual Julia function
+function my_add(a::Int32, b::Int32)::Int32
+    return a + b
+end
+
+# Compile through full pipeline (LLVM → CDFG → Schedule → Simulator)
+compiled = compile_kernel(my_add, Tuple{Int32, Int32})
+
+if compiled.is_compiled
+    println("Critical path: $(compiled.critical_path) cycles")
+    println("Total nodes: $(compiled.total_nodes)")
+
+    # Run cycle-accurate simulation
+    result = simulate_compiled(compiled, Dict(:a => 5, :b => 3))
+    println("Result: $(result.outputs)")
+end
 ```
 
 ## Getting Started with Verilator
@@ -655,6 +842,60 @@ fpga_compile(my_kernel, types; params=params)
 | `NativeSimulator` | Main simulation engine |
 | `SimulationResult` | Simulation output |
 
+### CoDesign Module (`FPGACompiler.CoDesign`)
+
+#### Workload Definition
+
+| Function | Description |
+|----------|-------------|
+| `conv2d_workload(; kernel_size, img_height, img_width)` | 2D convolution workload |
+| `matmul_workload(; M, N, K)` | Matrix multiplication workload |
+| `fir_filter_workload(; taps, samples)` | FIR filter workload |
+| `elementwise_workload(; height, width, ops)` | Elementwise operation workload |
+| `reduction_workload(; length)` | Reduction workload |
+
+#### DSE Functions
+
+| Function | Description |
+|----------|-------------|
+| `sweep_unroll_factor(workload, range)` | Sweep unroll factor |
+| `sweep_dse_space(workload; kwargs...)` | Multi-dimensional DSE sweep |
+| `find_optimal_config(workload; kwargs...)` | Find optimal configuration |
+| `estimate_performance(sim)` | Quick performance estimate |
+
+#### Virtual Devices
+
+| Function | Description |
+|----------|-------------|
+| `alveo_u200()` | Xilinx Alveo U200 preset |
+| `alveo_u280()` | Xilinx Alveo U280 preset |
+| `zynq_7020()` | Xilinx Zynq-7020 preset |
+| `arty_a7()` | Digilent Arty A7-35T preset |
+| `allocate!(device, name, type, dims)` | Allocate device memory |
+| `copyto_device!(device, dst, src)` | DMA transfer to device |
+| `resource_utilization(device)` | Get resource utilization % |
+
+#### Simulation
+
+| Function | Description |
+|----------|-------------|
+| `CoDesignKernel(name; workload, dse)` | Create CoDesign kernel |
+| `simulate!(kernel; backend)` | Run simulation |
+| `estimate!(kernel)` | Get performance estimate |
+| `compile_kernel(f, types)` | Compile through full pipeline |
+
+#### Types
+
+| Type | Description |
+|------|-------------|
+| `DSEParameters` | Design space exploration parameters |
+| `WorkloadDescriptor` | Kernel workload characteristics |
+| `VirtualFPGADevice` | Virtual FPGA device |
+| `VirtualFPGAArray` | Device memory array |
+| `ParametricSimulator` | Fast parametric simulator |
+| `CoDesignKernel` | Unified kernel wrapper |
+| `CompiledKernel` | Full-pipeline compiled kernel |
+
 ## Limitations
 
 - **No dynamic memory allocation** - All arrays must be fixed-size
@@ -679,12 +920,15 @@ fpga_compile(my_kernel, types; params=params)
 - [Graphs.jl](https://github.com/JuliaGraphs/Graphs.jl) - Graph data structures for CFG/DFG
 - [JuMP.jl](https://github.com/jump-dev/JuMP.jl) - Mathematical optimization for ILP scheduling
 - [HiGHS.jl](https://github.com/jump-dev/HiGHS.jl) - High-performance LP/MIP solver
+- [Observables.jl](https://github.com/JuliaGizmos/Observables.jl) - Reactive programming for CoDesign UI
 
 ### Optional Dependencies
 
 - [Verilator](https://verilator.org/) - Fast Verilog simulation
 - [CxxWrap.jl](https://github.com/JuliaInterop/CxxWrap.jl) - C++ integration for Verilator
 - [GTKWave](http://gtkwave.sourceforge.net/) - VCD waveform viewer
+- [Makie.jl](https://github.com/JuliaPlots/Makie.jl) - Visualization for CoDesign dashboards
+- [Pluto.jl](https://github.com/fonsp/Pluto.jl) - Interactive notebooks for DSE exploration
 
 ## Documentation
 

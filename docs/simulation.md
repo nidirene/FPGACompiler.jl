@@ -531,6 +531,32 @@ result = simulate_native(sim, inputs; verbose=true)
 
 ---
 
+## CoDesign Parametric Simulation
+
+For rapid Design Space Exploration (DSE), the CoDesign module provides a lightweight parametric simulator that estimates performance without LLVM compilation:
+
+```julia
+using FPGACompiler.CoDesign
+
+# Define workload characteristics
+workload = conv2d_workload(kernel_size=3, img_height=28, img_width=28)
+
+# Create parametric simulator
+sim = ParametricSimulator(workload; dse=DSEParameters(unroll_factor=4))
+
+# Quick estimate (no LLVM compilation)
+est = estimate_performance(sim)
+println("Estimated cycles: ", est.estimated_cycles)
+println("Throughput: ", est.estimated_throughput)
+
+# Sweep DSE space rapidly
+results = sweep_unroll_factor(workload, 1:16)
+```
+
+See the [CoDesign section in the API Reference](api.md#codesign-module) for full documentation.
+
+---
+
 ## Performance Comparison
 
 ### Benchmark Results
