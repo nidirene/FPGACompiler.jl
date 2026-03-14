@@ -12,7 +12,7 @@ FPGACompiler.jl enables writing FPGA kernels in pure Julia by:
 4. Injecting HLS metadata for pipelining, memory partitioning, and bit-width optimization
 5. **Native HLS backend** with ASAP/ALAP/list/ILP scheduling and resource binding
 6. **RTL generation** producing synthesizable Verilog
-7. **Simulation** via Verilator integration
+7. **Dual simulation backends**: Native Julia simulator and Verilator integration
 8. Outputting clean LLVM IR for vendor HLS tools (Intel oneAPI, AMD Vitis, Bambu)
 
 ## Installation
@@ -114,11 +114,22 @@ Produces synthesizable Verilog from the scheduled CDFG:
 
 ### Phase 6: Simulation
 
-Verifies generated RTL with Verilator:
+Verifies generated RTL with two backends:
 
-- **Testbench Generation** - Automatic C++ testbenches
-- **Verilator Integration** - Compile and run simulations
-- **Waveform Output** - VCD traces for debugging
+#### Native Julia Simulator
+
+A pure Julia cycle-accurate RTL simulator with:
+- **Two-phase clock semantics** - Combinational evaluation followed by sequential latching
+- **X-value propagation** - Tracks undefined signals through the design
+- **VCD waveform output** - Compatible with GTKWave and other viewers
+- **No external dependencies** - Runs anywhere Julia runs
+
+#### Verilator Integration
+
+The open-source Verilator compiles Verilog into extremely fast C++ simulation:
+- **High performance** - 10-100x faster than interpreted simulation
+- **Cycle-accurate** - Exact hardware behavior
+- **Waveform tracing** - Full signal visibility
 
 ## Features
 
@@ -198,9 +209,93 @@ verilog = emit_verilog(rtl_module)
 write("my_kernel.v", verilog)
 ```
 
-### Simulation
+## Simulation
 
-Verify RTL with Verilator:
+FPGACompiler provides two simulation backends for verifying generated RTL.
+
+### Native Julia Simulator
+
+The native simulator runs entirely in Julia with no external dependencies:
+
+```julia
+using FPGACompiler.Sim
+
+# Create simulator from CDFG and schedule
+sim = build_simulator(cdfg, schedule)
+
+# Set input values
+set_input!(sim, :a, 10)
+set_input!(sim, :b, 5)
+
+# Start the computation
+start!(sim)
+
+# Run until completion (or max cycles)
+result = run!(sim; max_cycles=1000, verbose=true)
+
+# Check outputs
+if result.success
+    output = get_output(sim, :result)
+    println("Result: $(to_unsigned(output))")
+end
+```
+
+#### Cycle-by-Cycle Debugging
+
+```julia
+# Reset simulator
+reset!(sim)
+set_input!(sim, :a, 42)
+start!(sim)
+
+# Step through cycles
+while !is_done(sim)
+    state = step!(sim)
+    println("Cycle $(state[:cycle]): State = $(state[:fsm_state])")
+
+    # Inspect any signal
+    val = get_signal_value(sim, "add_result")
+    println("  add_result = $val")
+end
+```
+
+#### VCD Waveform Output
+
+```julia
+# Enable tracing for specific signals
+enable_trace!(sim, ["a", "b", "result", "fsm_state"])
+
+# Run simulation
+simulate_native(sim, Dict(:a => 10, :b => 5))
+
+# Write VCD file
+write_vcd(sim, "simulation.vcd")
+```
+
+View with GTKWave:
+```bash
+gtkwave simulation.vcd
+```
+
+#### Memory Initialization
+
+```julia
+# Initialize BRAM contents
+initialize_memory!(sim, "data_mem", [1, 2, 3, 4, 5, 6, 7, 8])
+
+# Run computation
+run!(sim)
+
+# Read memory results
+for i in 0:7
+    val = read_memory(sim, "data_mem", i)
+    println("mem[$i] = $(to_unsigned(val))")
+end
+```
+
+### Verilator Integration
+
+For higher performance simulation, use Verilator:
 
 ```julia
 using FPGACompiler.Sim
@@ -211,12 +306,256 @@ tb = generate_testbench(rtl_module, [
     (a=4.0f0, b=5.0f0, c=6.0f0),  # Test vector 2
 ])
 
-# Run simulation
+# Run simulation with Verilator
 result = run_verilator(rtl_module, tb)
 @assert result.passed
 ```
 
-### Compiler Parameters
+### Unified Simulation Interface
+
+Both backends support a unified interface:
+
+```julia
+using FPGACompiler.Sim
+
+# Native simulation (no external tools required)
+result = simulate(cdfg, schedule, Dict(:a => 10, :b => 5); backend=:native)
+
+# Verilator simulation (faster, requires Verilator installed)
+result = simulate(rtl_module, Dict("a" => 10, "b" => 5); backend=:verilator)
+```
+
+## Getting Started with Verilator
+
+The open-source community provides **Verilator**, which compiles Verilog into an extremely fast C++ simulation. You can use Julia's `CxxWrap.jl` to compile the generated Verilog, wrap the C++ simulator cycle-by-cycle, and inject Julia arrays directly into the simulated hardware clock pins to verify the outputs.
+
+### Installing Verilator
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get install verilator
+```
+
+**macOS:**
+```bash
+brew install verilator
+```
+
+**Windows (MSYS2):**
+```bash
+pacman -S mingw-w64-x86_64-verilator
+```
+
+**From source:**
+```bash
+git clone https://github.com/verilator/verilator
+cd verilator
+autoconf
+./configure
+make -j$(nproc)
+sudo make install
+```
+
+### Basic Verilator Workflow
+
+1. **Generate Verilog from Julia:**
+
+```julia
+using FPGACompiler
+using FPGACompiler.HLS
+using FPGACompiler.RTL
+
+# Create your design
+cdfg = CDFG("adder")
+# ... add operations ...
+
+# Generate RTL
+rtl = generate_rtl(cdfg)
+verilog = emit_verilog(rtl)
+
+# Write Verilog file
+write("adder.v", verilog)
+```
+
+2. **Compile with Verilator:**
+
+```bash
+verilator --cc adder.v --exe --build sim_main.cpp
+```
+
+3. **Run simulation:**
+
+```bash
+./obj_dir/Vadder
+```
+
+### Advanced: Julia-Verilator Integration with CxxWrap.jl
+
+For tight integration between Julia and Verilator, use `CxxWrap.jl` to call the C++ simulator directly:
+
+**Step 1: Generate wrapper code**
+
+```cpp
+// verilator_wrapper.cpp
+#include "jlcxx/jlcxx.hpp"
+#include "Vadder.h"
+#include "verilated.h"
+#include "verilated_vcd_c.h"
+
+class AdderSim {
+public:
+    Vadder* dut;
+    VerilatedVcdC* tfp;
+    vluint64_t sim_time;
+
+    AdderSim() : sim_time(0) {
+        dut = new Vadder;
+        Verilated::traceEverOn(true);
+        tfp = new VerilatedVcdC;
+        dut->trace(tfp, 99);
+        tfp->open("trace.vcd");
+    }
+
+    ~AdderSim() {
+        tfp->close();
+        delete tfp;
+        delete dut;
+    }
+
+    void reset() {
+        dut->rst = 1;
+        for (int i = 0; i < 5; i++) {
+            dut->clk = 0; dut->eval(); tfp->dump(sim_time++);
+            dut->clk = 1; dut->eval(); tfp->dump(sim_time++);
+        }
+        dut->rst = 0;
+    }
+
+    void set_input_a(uint32_t val) { dut->a = val; }
+    void set_input_b(uint32_t val) { dut->b = val; }
+    uint32_t get_output() { return dut->result; }
+    bool is_done() { return dut->done; }
+
+    void tick() {
+        dut->clk = 0; dut->eval(); tfp->dump(sim_time++);
+        dut->clk = 1; dut->eval(); tfp->dump(sim_time++);
+    }
+
+    void start() {
+        dut->start = 1;
+        tick();
+        dut->start = 0;
+    }
+};
+
+JLCXX_MODULE define_julia_module(jlcxx::Module& mod) {
+    mod.add_type<AdderSim>("AdderSim")
+        .constructor<>()
+        .method("reset!", &AdderSim::reset)
+        .method("set_a!", &AdderSim::set_input_a)
+        .method("set_b!", &AdderSim::set_input_b)
+        .method("get_output", &AdderSim::get_output)
+        .method("is_done", &AdderSim::is_done)
+        .method("tick!", &AdderSim::tick)
+        .method("start!", &AdderSim::start);
+}
+```
+
+**Step 2: Build the wrapper**
+
+```bash
+# Compile Verilog to C++
+verilator --cc adder.v --trace -CFLAGS "-fPIC"
+
+# Build wrapper library
+g++ -shared -fPIC -o libadder_sim.so \
+    verilator_wrapper.cpp \
+    obj_dir/Vadder.cpp \
+    obj_dir/verilated.cpp \
+    obj_dir/verilated_vcd_c.cpp \
+    $(julia -e 'using CxxWrap; print(CxxWrap.prefix_path())') \
+    -I$(julia -e 'using CxxWrap; print(CxxWrap.include_dir())') \
+    -I/usr/share/verilator/include \
+    -L$(julia -e 'print(Sys.BINDIR, "/../lib")') -ljulia
+```
+
+**Step 3: Use from Julia**
+
+```julia
+using CxxWrap
+
+# Load the wrapper
+@wrapmodule("./libadder_sim.so")
+function __init__()
+    @initcxx
+end
+
+# Create simulator and run tests
+function test_adder()
+    sim = AdderSim()
+    reset!(sim)
+
+    # Test case 1: 5 + 3 = 8
+    set_a!(sim, 5)
+    set_b!(sim, 3)
+    start!(sim)
+
+    while !is_done(sim)
+        tick!(sim)
+    end
+
+    result = get_output(sim)
+    @assert result == 8 "Expected 8, got $result"
+
+    println("Test passed! 5 + 3 = $result")
+end
+
+test_adder()
+```
+
+### Batch Testing with Julia Arrays
+
+Inject Julia arrays directly into simulation:
+
+```julia
+function batch_test(sim, test_vectors::Vector{Tuple{UInt32, UInt32, UInt32}})
+    passed = 0
+    failed = 0
+
+    for (a, b, expected) in test_vectors
+        reset!(sim)
+        set_a!(sim, a)
+        set_b!(sim, b)
+        start!(sim)
+
+        cycles = 0
+        while !is_done(sim) && cycles < 1000
+            tick!(sim)
+            cycles += 1
+        end
+
+        result = get_output(sim)
+        if result == expected
+            passed += 1
+        else
+            println("FAIL: $a + $b = $result (expected $expected)")
+            failed += 1
+        end
+    end
+
+    println("Results: $passed passed, $failed failed")
+    return failed == 0
+end
+
+# Generate random test vectors
+test_vectors = [(rand(UInt32) % 1000, rand(UInt32) % 1000, 0) for _ in 1:100]
+test_vectors = [(a, b, a + b) for (a, b, _) in test_vectors]
+
+sim = AdderSim()
+batch_test(sim, test_vectors)
+```
+
+## Compiler Parameters
 
 ```julia
 params = FPGACompilerParams(
@@ -279,11 +618,42 @@ fpga_compile(my_kernel, types; params=params)
 
 ### Simulation Module (`FPGACompiler.Sim`)
 
+#### Native Simulator
+
 | Function | Description |
 |----------|-------------|
-| `generate_testbench(module, vectors)` | Create C++ testbench |
-| `run_verilator(module, testbench)` | Compile and simulate with Verilator |
-| `verify_output(expected, actual)` | Compare simulation results |
+| `build_simulator(cdfg, schedule)` | Create simulator from CDFG |
+| `reset!(sim)` | Reset to initial state |
+| `tick!(sim)` | Execute one clock cycle |
+| `run!(sim; max_cycles)` | Run until completion |
+| `start!(sim)` | Assert start signal |
+| `set_input!(sim, port, value)` | Set input port value |
+| `get_output(sim, port)` | Get output port value |
+| `get_state(sim)` | Get current FSM state |
+| `is_done(sim)` | Check if simulation complete |
+| `enable_trace!(sim, signals)` | Enable signal tracing |
+| `write_vcd(sim, file)` | Write VCD waveform |
+
+#### Verilator Integration
+
+| Function | Description |
+|----------|-------------|
+| `check_verilator()` | Check if Verilator is installed |
+| `compile_verilator(verilog, output_dir)` | Compile Verilog to C++ |
+| `run_verilator(executable)` | Run compiled simulation |
+| `simulate(rtl, inputs)` | High-level simulation wrapper |
+
+#### Types
+
+| Type | Description |
+|------|-------------|
+| `SimValue` | Hardware value with X support |
+| `Wire` | Combinational signal |
+| `Register` | Sequential flip-flop |
+| `ALU` | Arithmetic/logic unit |
+| `Memory` | BRAM simulation |
+| `NativeSimulator` | Main simulation engine |
+| `SimulationResult` | Simulation output |
 
 ## Limitations
 
@@ -300,6 +670,7 @@ fpga_compile(my_kernel, types; params=params)
 | Intel | oneAPI FPGA | `aoc kernel.ll` |
 | Open Source | Bambu | `bambu kernel.ll` |
 | Open Source | CIRCT | Via MLIR pipeline |
+| Open Source | Verilator | `verilator --cc kernel.v` |
 
 ## Dependencies
 
@@ -309,11 +680,18 @@ fpga_compile(my_kernel, types; params=params)
 - [JuMP.jl](https://github.com/jump-dev/JuMP.jl) - Mathematical optimization for ILP scheduling
 - [HiGHS.jl](https://github.com/jump-dev/HiGHS.jl) - High-performance LP/MIP solver
 
+### Optional Dependencies
+
+- [Verilator](https://verilator.org/) - Fast Verilog simulation
+- [CxxWrap.jl](https://github.com/JuliaInterop/CxxWrap.jl) - C++ integration for Verilator
+- [GTKWave](http://gtkwave.sourceforge.net/) - VCD waveform viewer
+
 ## Documentation
 
 - [API Reference](docs/api.md) - Complete function and type documentation
 - [Architecture](docs/architecture.md) - Internal design and extension points
 - [Tutorial](docs/tutorial.md) - Step-by-step usage guide
+- [Simulation Guide](docs/simulation.md) - Native and Verilator simulation
 - [Vendor Integration](docs/vendor-integration.md) - Intel/AMD/Bambu workflows
 
 ## Examples
@@ -324,6 +702,8 @@ See the `examples/` directory for complete working examples:
 - [`matrix_mul.jl`](examples/matrix_mul.jl) - Pipelined matrix multiplication
 - [`memory_partition.jl`](examples/memory_partition.jl) - PartitionedArray usage
 - [`custom_bitwidth.jl`](examples/custom_bitwidth.jl) - FixedInt for resource efficiency
+- [`native_simulation.jl`](examples/native_simulation.jl) - Native Julia simulation
+- [`verilator_integration.jl`](examples/verilator_integration.jl) - Verilator workflow
 
 Run an example:
 ```bash
@@ -339,6 +719,7 @@ Contributions are welcome! Areas of interest:
 - Additional scheduling algorithms (force-directed, modulo scheduling)
 - FPGA vendor backend integration (Vivado, Quartus)
 - Resource estimation improvements
+- Simulation performance optimizations
 
 ## License
 
